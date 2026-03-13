@@ -496,7 +496,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 fn format_hours(hours: u32) -> String {
-    if hours >= 24 && hours % 24 == 0 {
+    if hours >= 24 && hours.is_multiple_of(24) {
         format!("{}d", hours / 24)
     } else {
         format!("{}h", hours)
