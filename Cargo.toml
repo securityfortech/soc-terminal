@@ -1,0 +1,19 @@
+[package]
+name = "siem-correlator"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "siem"
+path = "src/main.rs"
+
+[dependencies]
+anyhow     = "1"
+crossterm  = "0.27"
+futures-util = "0.3"
+ratatui    = "0.26"
+reqwest    = { version = "0.12", features = ["json", "stream"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio      = { version = "1", features = ["full"] }

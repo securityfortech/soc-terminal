@@ -1,0 +1,17 @@
+opensearch:
+  url: https://localhost:9200
+  username: admin
+  password: YOUR_OPENSEARCH_PASSWORD
+  verify_ssl: false
+
+llm:
+  provider: claude   # "claude" or "ollama"
+  claude:
+    api_key: "sk-ant-..."   # or set ANTHROPIC_API_KEY env var
+    model: claude-sonnet-4-6
+  ollama:
+    url: http://localhost:11434
+    model: qwen3.5:0.8b
+
+ui:
+  page_size: 50
