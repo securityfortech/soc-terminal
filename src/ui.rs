@@ -109,11 +109,11 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
             Row::new(vec![
                 Cell::from(if selected { "■" } else { "□" }).style(mark_style),
-                Cell::from(e.timestamp.clone()).style(Style::default().fg(Color::DarkGray)),
+                Cell::from(e.timestamp.as_str()).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(e.level.to_string()).style(level_style(e.level)),
                 Cell::from(truncate(&e.agent, 22)).style(Style::default().fg(Color::Cyan)),
                 Cell::from(truncate(&e.rule_id, 8)).style(Style::default().fg(Color::DarkGray)),
-                Cell::from(e.description.clone()),
+                Cell::from(e.description.as_str()),
             ])
         })
         .collect();
@@ -155,7 +155,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    frame.render_widget(Paragraph::new(app.status.clone()).style(style), area);
+    frame.render_widget(Paragraph::new(app.status.as_str()).style(style), area);
 }
 
 // ─── Analysis Panel ──────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ fn render_analysis(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = wrapped[scroll..]
         .iter()
         .take(inner_h)
-        .map(|s| Line::from(s.clone()))
+        .map(|s| Line::from(s.as_str()))
         .collect();
 
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
@@ -255,7 +255,7 @@ fn render_index_picker(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
-            ListItem::new(idx.clone()).style(style)
+            ListItem::new(idx.as_str()).style(style)
         })
         .collect();
 

@@ -58,7 +58,8 @@ impl LlmClient {
                 let t: Vec<&str> = techs.iter().filter_map(|v| v.as_str()).collect();
                 let ids: Vec<String> = src["rule"]["mitre"]["id"]
                     .as_array()
-                    .unwrap_or(&vec![])
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[])
                     .iter()
                     .filter_map(|v| v.as_str())
                     .map(String::from)
@@ -121,8 +122,8 @@ impl LlmClient {
 
             // Process complete SSE lines
             while let Some(newline) = buf.find('\n') {
-                let line = buf[..newline].trim().to_string();
-                buf = buf[newline + 1..].to_string();
+                let line = buf[..newline].trim().to_owned();
+                buf.drain(..=newline);
 
                 if let Some(data) = line.strip_prefix("data: ") {
                     if data == "[DONE]" {
@@ -166,8 +167,8 @@ impl LlmClient {
             buf.push_str(std::str::from_utf8(&chunk)?);
 
             while let Some(newline) = buf.find('\n') {
-                let line = buf[..newline].trim().to_string();
-                buf = buf[newline + 1..].to_string();
+                let line = buf[..newline].trim().to_owned();
+                buf.drain(..=newline);
 
                 if line.is_empty() {
                     continue;

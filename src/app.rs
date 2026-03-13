@@ -130,7 +130,7 @@ impl App {
         let pages = if self.total_entries == 0 {
             1
         } else {
-            (self.total_entries + self.page_size - 1) / self.page_size
+            self.total_entries.div_ceil(self.page_size)
         };
         let index = self.current_index.as_deref().unwrap_or("none");
         self.status = format!(
