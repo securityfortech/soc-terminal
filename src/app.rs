@@ -1,6 +1,17 @@
-use std::collections::HashSet;
+use std::cell::Cell;
+use std::collections::{HashSet, VecDeque};
 
 use crate::opensearch::Entry;
+
+pub const TIME_RANGES: &[(&str, u32)] = &[
+    ("Last 1 hour",   1),
+    ("Last 6 hours",  6),
+    ("Last 24 hours", 24),
+    ("Last 7 days",   168),
+    ("Last 30 days",  720),
+];
+
+const MAX_HISTORY: usize = 10;
 
 pub enum AppMessage {
     IndicesLoaded(Vec<String>),
@@ -30,13 +41,17 @@ pub struct App {
     pub filter_hours: u32,
     pub filter_agent: String,
 
-    // LLM
+    // LLM & analysis
     pub llm_provider: String,
     pub analysis_text: String,
     pub is_analysing: bool,
-    pub analysis_scroll: i32,                   // offset from bottom (0=bottom, -N=N lines up)
-    pub analysis_auto_scroll: bool,             // follows bottom while streaming
-    pub analysis_max_scroll: std::cell::Cell<usize>, // cached by render, used to clamp scroll
+    pub analysis_scroll: i32,
+    pub analysis_auto_scroll: bool,
+    pub analysis_max_scroll: Cell<usize>,
+
+    // Analysis history
+    pub analysis_history: VecDeque<String>,
+    pub history_view: Option<usize>, // None = current live, Some(i) = history[i]
 
     // UI state
     pub status: String,
@@ -44,10 +59,24 @@ pub struct App {
     pub show_index_picker: bool,
     pub index_picker_cursor: usize,
     pub show_help: bool,
+
+    // Detail panel
+    pub show_detail: bool,
+    pub detail_scroll: usize,
+    pub detail_max_scroll: Cell<usize>,
+
+    // Time range picker
+    pub show_time_picker: bool,
+    pub time_picker_cursor: usize,
+
+    // Agent filter input
+    pub show_agent_filter: bool,
+    pub agent_filter_input: String,
 }
 
 impl App {
     pub fn new(page_size: usize, llm_provider: String) -> Self {
+        let time_cursor = TIME_RANGES.iter().position(|(_, h)| *h == 24).unwrap_or(2);
         Self {
             indices: vec![],
             current_index: None,
@@ -65,13 +94,33 @@ impl App {
             is_analysing: false,
             analysis_scroll: 0,
             analysis_auto_scroll: true,
-            analysis_max_scroll: std::cell::Cell::new(0),
+            analysis_max_scroll: Cell::new(0),
+            analysis_history: VecDeque::new(),
+            history_view: None,
             status: "Connecting to OpenSearch...".to_string(),
             should_quit: false,
             show_index_picker: false,
             index_picker_cursor: 0,
             show_help: false,
+            show_detail: false,
+            detail_scroll: 0,
+            detail_max_scroll: Cell::new(0),
+            show_time_picker: false,
+            time_picker_cursor: time_cursor,
+            show_agent_filter: false,
+            agent_filter_input: String::new(),
         }
+    }
+
+    pub fn current_entry(&self) -> Option<&Entry> {
+        self.entries.get(self.table_cursor)
+    }
+
+    /// Pretty-printed JSON of the current entry's _source.
+    pub fn detail_json(&self) -> String {
+        self.current_entry()
+            .and_then(|e| serde_json::to_string_pretty(&e.raw["_source"]).ok())
+            .unwrap_or_default()
     }
 
     pub fn toggle_select_current(&mut self) {
@@ -126,21 +175,54 @@ impl App {
         self.update_status();
     }
 
-    pub fn update_status(&mut self) {
-        let pages = if self.total_entries == 0 {
-            1
-        } else {
-            self.total_entries.div_ceil(self.page_size)
+    /// Save completed analysis to history ring buffer.
+    pub fn save_analysis(&mut self) {
+        let text = self.analysis_text.trim().to_owned();
+        if text.is_empty() { return; }
+        if self.analysis_history.len() >= MAX_HISTORY {
+            self.analysis_history.pop_front();
+        }
+        self.analysis_history.push_back(text);
+        self.history_view = None;
+    }
+
+    /// Tab: step backward through history (wraps back to current).
+    pub fn cycle_history(&mut self) {
+        if self.analysis_history.is_empty() { return; }
+        self.history_view = match self.history_view {
+            None => Some(self.analysis_history.len().saturating_sub(1)),
+            Some(0) => None,
+            Some(i) => Some(i - 1),
         };
+        self.analysis_scroll = 0;
+        self.analysis_auto_scroll = false;
+    }
+
+    /// Text currently shown in the analysis panel.
+    pub fn displayed_analysis(&self) -> &str {
+        match self.history_view {
+            None => &self.analysis_text,
+            Some(i) => self.analysis_history.get(i).map(String::as_str).unwrap_or(""),
+        }
+    }
+
+    pub fn update_status(&mut self) {
+        let pages = self.total_entries.div_ceil(self.page_size).max(1);
         let index = self.current_index.as_deref().unwrap_or("none");
+        let agent_part = if self.filter_agent.is_empty() {
+            String::new()
+        } else {
+            format!(" | Agent: {}", self.filter_agent)
+        };
         self.status = format!(
-            " {} entries | Page {}/{} | Selected: {} | LvL≥{} | Last {}h | {} | LLM: {}",
+            " {} entries | Page {}/{} | Selected: {} | Lvl≥{} | Last {}h{} | {} | LLM: {}",
             self.total_entries,
             self.page + 1,
             pages,
             self.selected_ids.len(),
             self.filter_level,
             self.filter_hours,
+            agent_part,
             index,
             self.llm_provider,
         );

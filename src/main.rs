@@ -17,7 +17,7 @@ mod llm;
 mod opensearch;
 mod ui;
 
-use app::{App, AppMessage};
+use app::{App, AppMessage, TIME_RANGES};
 use opensearch::Filters;
 
 #[tokio::main]
@@ -34,10 +34,8 @@ async fn main() -> Result<()> {
     let mut app = App::new(config.ui.page_size, config.llm.provider.clone());
     let (tx, mut rx) = mpsc::channel::<AppMessage>(256);
 
-    // Load indices on startup
     spawn_load_indices(tx.clone(), os_client.clone());
 
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -46,7 +44,6 @@ async fn main() -> Result<()> {
 
     let result = event_loop(&mut terminal, &mut app, &mut rx, &tx, &os_client, &llm_client).await;
 
-    // Always restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -65,12 +62,10 @@ async fn event_loop(
     loop {
         terminal.draw(|f| ui::render(f, app))?;
 
-        // Drain all pending background messages
         while let Ok(msg) = rx.try_recv() {
             handle_message(app, msg, tx, os_client);
         }
 
-        // Handle keyboard (non-blocking, 16 ms tick)
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 handle_key(app, key, tx, os_client, llm_client);
@@ -95,7 +90,6 @@ fn handle_message(
     match msg {
         AppMessage::IndicesLoaded(indices) => {
             app.indices = indices.clone();
-            // Default to most recent wazuh-alerts, else first index
             let default = indices
                 .iter()
                 .find(|i| i.contains("wazuh-alerts"))
@@ -118,6 +112,7 @@ fn handle_message(
             app.analysis_text.push_str(&text);
         }
         AppMessage::LlmDone => {
+            app.save_analysis();
             app.is_analysing = false;
             app.update_status();
         }
@@ -140,13 +135,13 @@ fn handle_key(
     os_client: &Arc<opensearch::OpenSearchClient>,
     llm_client: &Arc<llm::LlmClient>,
 ) {
-    // Help overlay captures all keys while open
+    // Help overlay
     if app.show_help {
         app.show_help = false;
         return;
     }
 
-    // Index picker captures all keys while open
+    // Index picker
     if app.show_index_picker {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.show_index_picker = false,
@@ -172,6 +167,74 @@ fn handle_key(
         return;
     }
 
+    // Detail panel
+    if app.show_detail {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.show_detail = false,
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.detail_scroll = app.detail_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let max = app.detail_max_scroll.get();
+                if app.detail_scroll < max {
+                    app.detail_scroll += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                app.detail_scroll = app.detail_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                let max = app.detail_max_scroll.get();
+                app.detail_scroll = (app.detail_scroll + 10).min(max);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Time range picker
+    if app.show_time_picker {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => app.show_time_picker = false,
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.time_picker_cursor = app.time_picker_cursor.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if app.time_picker_cursor + 1 < TIME_RANGES.len() {
+                    app.time_picker_cursor += 1;
+                }
+            }
+            KeyCode::Enter => {
+                app.filter_hours = TIME_RANGES[app.time_picker_cursor].1;
+                app.show_time_picker = false;
+                app.page = 0;
+                spawn_load_entries(app, tx.clone(), os_client.clone());
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Agent filter input
+    if app.show_agent_filter {
+        match key.code {
+            KeyCode::Esc => app.show_agent_filter = false,
+            KeyCode::Enter => {
+                app.filter_agent = app.agent_filter_input.trim().to_owned();
+                app.show_agent_filter = false;
+                app.page = 0;
+                spawn_load_entries(app, tx.clone(), os_client.clone());
+            }
+            KeyCode::Backspace => { app.agent_filter_input.pop(); }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.agent_filter_input.clear();
+            }
+            KeyCode::Char(c) => app.agent_filter_input.push(c),
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
         // Quit
         KeyCode::Char('q') | KeyCode::Char('Q') => app.should_quit = true,
@@ -186,8 +249,17 @@ fn handle_key(
         // Selection
         KeyCode::Char(' ') => app.toggle_select_current(),
 
+        // Detail panel
+        KeyCode::Enter => {
+            if app.current_entry().is_some() {
+                app.show_detail = true;
+                app.detail_scroll = 0;
+            }
+        }
+
         // Analyse selected
         KeyCode::Char('a') | KeyCode::Char('A') => {
+            app.history_view = None;
             spawn_analyse(app, tx.clone(), llm_client.clone());
         }
 
@@ -218,16 +290,39 @@ fn handle_key(
             app.show_index_picker = true;
         }
 
-        // Scroll analysis panel  (scroll is offset from bottom: 0=bottom, -N=N lines up)
+        // Time range picker
+        KeyCode::Char('t') | KeyCode::Char('T') => {
+            app.time_picker_cursor = TIME_RANGES
+                .iter()
+                .position(|(_, h)| *h == app.filter_hours)
+                .unwrap_or(2);
+            app.show_time_picker = true;
+        }
+
+        // Agent filter
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            app.agent_filter_input = app.filter_agent.clone();
+            app.show_agent_filter = true;
+        }
+
+        // Export
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            export(app);
+        }
+
+        // Scroll analysis panel
         KeyCode::Char('[') => {
             app.analysis_auto_scroll = false;
             let min = -(app.analysis_max_scroll.get() as i32);
-            app.analysis_scroll = (app.analysis_scroll - 1).max(min); // clamp at top
+            app.analysis_scroll = (app.analysis_scroll - 1).max(min);
         }
         KeyCode::Char(']') => {
             app.analysis_auto_scroll = false;
-            app.analysis_scroll = (app.analysis_scroll + 1).min(0); // clamp at bottom
+            app.analysis_scroll = (app.analysis_scroll + 1).min(0);
         }
+
+        // Analysis history
+        KeyCode::Tab => app.cycle_history(),
 
         // Help
         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') => app.show_help = true,
@@ -246,6 +341,41 @@ fn handle_key(
         }
 
         _ => {}
+    }
+}
+
+// ─── Export ──────────────────────────────────────────────────────────────────
+
+fn export(app: &mut App) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let entries: Vec<serde_json::Value> = app
+        .entries
+        .iter()
+        .filter(|e| app.selected_ids.contains(&e.id))
+        .map(|e| e.raw.clone())
+        .collect();
+
+    let analysis = app.displayed_analysis().to_owned();
+    let count = entries.len();
+
+    let data = serde_json::json!({
+        "exported_at_unix": ts,
+        "analysis": analysis,
+        "entry_count": count,
+        "entries": entries,
+    });
+
+    let filename = format!("soc-export-{ts}.json");
+    match serde_json::to_string_pretty(&data) {
+        Ok(content) => match std::fs::write(&filename, content) {
+            Ok(_) => app.status = format!(" Exported {count} entries → {filename}"),
+            Err(e) => app.status = format!(" Export failed: {e}"),
+        },
+        Err(e) => app.status = format!(" Export failed: {e}"),
     }
 }
 
@@ -296,7 +426,6 @@ fn spawn_analyse(
         return;
     }
 
-    // Clone config with current provider override
     let mut cfg = llm_client.config.clone();
     cfg.provider = app.llm_provider.clone();
     let client = llm::LlmClient::new(cfg);
@@ -304,13 +433,12 @@ fn spawn_analyse(
     app.analysis_text =
         format!("Analysing {} entries with {}…\n\n", selected.len(), app.llm_provider);
     app.is_analysing = true;
-    app.analysis_scroll = 0;        // 0 = bottom
+    app.analysis_scroll = 0;
     app.analysis_auto_scroll = true;
 
     let (chunk_tx, mut chunk_rx) = mpsc::channel::<String>(128);
     let app_tx = tx.clone();
 
-    // Forward chunks → AppMessage
     tokio::spawn(async move {
         while let Some(chunk) = chunk_rx.recv().await {
             let _ = app_tx.send(AppMessage::LlmChunk(chunk)).await;
@@ -318,11 +446,9 @@ fn spawn_analyse(
         let _ = app_tx.send(AppMessage::LlmDone).await;
     });
 
-    // Run LLM
     tokio::spawn(async move {
         if let Err(e) = client.analyse(&selected, chunk_tx).await {
             let _ = tx.send(AppMessage::Error(e.to_string())).await;
         }
-        // chunk_tx dropped → forwarding task exits → LlmDone sent
     });
 }
