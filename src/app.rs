@@ -19,6 +19,10 @@ pub enum AppMessage {
     LlmChunk(String),
     LlmDone,
     Error(String),
+    /// Update the status bar text (used by background skills).
+    Status(String),
+    /// A skill saved a file — carry the filename for the status message.
+    ReportSaved(String),
 }
 
 pub struct App {
@@ -42,7 +46,8 @@ pub struct App {
     pub filter_agent: String,
 
     // LLM & analysis
-    pub llm_provider: String,
+    pub llm_provider: String,       // e.g. "openrouter:sonnet4.6" or "ollama"
+    pub llm_tags: Vec<String>,      // all available tags for cycling
     pub analysis_text: String,
     pub is_analysing: bool,
     pub analysis_scroll: i32,
@@ -72,10 +77,18 @@ pub struct App {
     // Agent filter input
     pub show_agent_filter: bool,
     pub agent_filter_input: String,
+
+    // Skill picker
+    pub show_skill_picker: bool,
+    pub skill_picker_cursor: usize,
+    pub is_running_skill: bool,
+
+    // Output directory for exports and reports
+    pub output_dir: String,
 }
 
 impl App {
-    pub fn new(page_size: usize, llm_provider: String) -> Self {
+    pub fn new(page_size: usize, llm_provider: String, llm_tags: Vec<String>, output_dir: String) -> Self {
         let time_cursor = TIME_RANGES.iter().position(|(_, h)| *h == 24).unwrap_or(2);
         Self {
             indices: vec![],
@@ -90,6 +103,7 @@ impl App {
             filter_hours: 24,
             filter_agent: String::new(),
             llm_provider,
+            llm_tags,
             analysis_text: String::new(),
             is_analysing: false,
             analysis_scroll: 0,
@@ -109,7 +123,19 @@ impl App {
             time_picker_cursor: time_cursor,
             show_agent_filter: false,
             agent_filter_input: String::new(),
+            show_skill_picker: false,
+            skill_picker_cursor: 0,
+            is_running_skill: false,
+            output_dir,
         }
+    }
+
+    /// Select all visible entries on the current page.
+    pub fn select_all_visible(&mut self) {
+        for e in &self.entries {
+            self.selected_ids.insert(e.id.clone());
+        }
+        self.update_status();
     }
 
     pub fn current_entry(&self) -> Option<&Entry> {
@@ -168,10 +194,13 @@ impl App {
     }
 
     pub fn toggle_llm(&mut self) {
-        self.llm_provider = match self.llm_provider.as_str() {
-            "claude" => "ollama".to_string(),
-            _ => "claude".to_string(),
+        if self.llm_tags.is_empty() { return; }
+        let current = self.llm_tags.iter().position(|t| t == &self.llm_provider);
+        let next = match current {
+            Some(i) => (i + 1) % self.llm_tags.len(),
+            None => 0,
         };
+        self.llm_provider = self.llm_tags[next].clone();
         self.update_status();
     }
 

@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::{App, TIME_RANGES};
+use crate::skills::SKILLS;
 
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
@@ -34,6 +35,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.show_detail        { render_detail(frame, app, area); }
     if app.show_time_picker   { render_time_picker(frame, app, area); }
     if app.show_agent_filter  { render_agent_filter(frame, app, area); }
+    if app.show_skill_picker  { render_skill_picker(frame, app, area); }
     if app.show_help          { render_help(frame, area); }
 }
 
@@ -57,9 +59,12 @@ fn render_title(frame: &mut Frame, area: Rect) {
 
 fn render_controls(frame: &mut Frame, app: &App, area: Rect) {
     let index = app.current_index.as_deref().unwrap_or("—");
-    let llm_color = match app.llm_provider.as_str() {
-        "claude" => Color::Magenta,
-        _ => Color::Green,
+    let llm_color = if app.llm_provider.starts_with("openrouter:") {
+        Color::Magenta
+    } else if app.llm_provider.starts_with("local:") {
+        Color::Green
+    } else {
+        Color::Cyan
     };
 
     let mut spans = vec![
@@ -160,9 +165,9 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let style = if app.is_analysing {
         Style::default().fg(Color::Yellow)
-    } else if app.status.contains("Error") {
+    } else if app.status.contains("Error") || app.status.contains("failed") {
         Style::default().fg(Color::Red)
-    } else if app.status.contains("Exported") {
+    } else if app.status.contains("Exported") || app.status.contains("Report saved") {
         Style::default().fg(Color::Green)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -233,6 +238,7 @@ fn render_footer(frame: &mut Frame, area: Rect) {
         kb("Enter"), Span::raw(" Detail  "),
         kb("Space"), Span::raw(" Select  "),
         kb("A"), Span::raw(" Analyse  "),
+        kb("S"), Span::raw(" Skills  "),
         kb("Tab"), Span::raw(" History  "),
         kb("T"), Span::raw(" Time  "),
         kb("F"), Span::raw(" Agent  "),
@@ -425,11 +431,13 @@ fn render_help(frame: &mut Frame, area: Rect) {
         ]),
         ("Selection", vec![
             ("Space",       "Toggle select entry"),
+            ("Ctrl-A",      "Select all visible entries"),
             ("C",           "Clear all selections"),
         ]),
         ("Analysis", vec![
             ("A",           "Analyse selected with LLM"),
-            ("L",           "Toggle LLM  (Claude ↔ Ollama)"),
+            ("S",           "Open skill picker"),
+            ("L",           "Cycle LLM model"),
             ("[  /  ]",     "Scroll analysis panel up / down"),
             ("Tab",         "Cycle through analysis history"),
         ]),
@@ -481,6 +489,50 @@ fn render_help(frame: &mut Frame, area: Rect) {
         ),
         popup,
     );
+}
+
+// ─── Skill Picker Popup ───────────────────────────────────────────────────────
+
+fn render_skill_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let w = 80u16.min(area.width.saturating_sub(4));
+    let h = (SKILLS.len() as u16 + 4).min(area.height.saturating_sub(4));
+    let popup = centered(area, w, h);
+
+    frame.render_widget(Clear, popup);
+
+    let items: Vec<ListItem> = SKILLS
+        .iter()
+        .map(|skill| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("  {:<32}", skill.name),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    skill.description,
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" Skills  (↑↓ navigate · Enter run · Esc cancel) ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut state = ListState::default();
+    state.select(Some(app.skill_picker_cursor));
+    frame.render_stateful_widget(list, popup, &mut state);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

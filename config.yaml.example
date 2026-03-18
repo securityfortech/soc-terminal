@@ -5,13 +5,44 @@ opensearch:
   verify_ssl: false
 
 llm:
-  provider: claude   # "claude" or "ollama"
-  claude:
-    api_key: "sk-ant-..."   # or set ANTHROPIC_API_KEY env var
-    model: claude-sonnet-4-6
+  provider: openrouter   # "openrouter" or "ollama"
+  openrouter:
+    api_key: "sk-or-..."   # or set OPENROUTER_API_KEY env var
+    models:
+      # Anthropic Claude
+      - id: anthropic/claude-sonnet-4-6
+        tag: sonnet4.6
+      - id: anthropic/claude-opus-4-6
+        tag: opus4.6
+      - id: anthropic/claude-haiku-4-5
+        tag: haiku4.5
+      # Google Gemini
+      - id: google/gemini-2.5-pro-preview
+        tag: gemini-pro
+      - id: google/gemini-2.5-flash-preview
+        tag: gemini-flash
+      # OpenAI
+      - id: openai/gpt-4.1
+        tag: gpt4.1
+      - id: openai/o3-mini
+        tag: o3-mini
+      # DeepSeek
+      - id: deepseek/deepseek-r1
+        tag: deepseek-r1
+      - id: deepseek/deepseek-chat
+        tag: deepseek-v3
+      # Qwen
+      - id: qwen/qwen3-235b-a22b
+        tag: qwen3-235b
+      - id: qwen/qwq-32b
+        tag: qwq-32b
   ollama:
     url: http://localhost:11434
-    model: qwen3.5:0.8b
+    models:
+      - id: qwen3.5:0.8b
+        tag: qwen3.5
+      - id: llama3.2
+        tag: llama3.2
 
 ui:
   page_size: 50
